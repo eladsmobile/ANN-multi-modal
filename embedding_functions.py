@@ -14,6 +14,7 @@ from PIL import Image
 import os
 import warnings
 import time
+from tqdm import tqdm
 
 warnings.filterwarnings("ignore", message="KMeans is known to have a memory leak")
 
@@ -28,6 +29,33 @@ sift = cv2.SIFT_create(nfeatures=n_features)
 class EmbeddingFunctions:
     def __init__(self, init=True):
         self.embedding_functions = {}
+
+        # loading pretrained models from cnn_embedding, resnet18_embedding, CLIP embedding functions
+        # cnn_embedding (vgg16 version)
+        self.vgg16 = PTmodels.vgg16(weights=PTmodels.VGG16_Weights.IMAGENET1K_V1)
+        self.vgg16 = torch.nn.Sequential(*list(self.vgg16.children())[:-1])
+        self.vgg16.eval()
+        # cnn_embedding (resnet50 version)
+        self.resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+        self.resnet50 = torch.nn.Sequential(*list(self.resnet50.children())[:-1])
+        self.resnet50.eval()
+        # resnet18_embedding
+        self.resnet18 = PTmodels.resnet18(weights=PTmodels.ResNet18_Weights.IMAGENET1K_V1)
+        self.resnet18.eval()
+        # common transform for the above models
+        self.transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),])
+        # semantic_concept_embedding
+        self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        # object_composition_embedding
+        self.faster_resnet50 = PTmodels.detection.fasterrcnn_resnet50_fpn(
+            weights=PTmodels.detection.FasterRCNN_ResNet50_FPN_Weights.DEFAULT)
+        self.faster_resnet50.eval()
 
         if init:
             self.embedding_functions["simple_color_histogram_embedding"] = self.simple_color_histogram_embedding
@@ -215,8 +243,6 @@ class EmbeddingFunctions:
         magnitude_spectrum = 20 * np.log(np.abs(fshift + 0.001))
         return magnitude_spectrum.flatten()[:128] / 90  # Take the first 128 values
 
-
-
     @staticmethod
     def sift_embedding(image_array, n_features=n_features, sift=sift):  # image_path
         """
@@ -265,9 +291,7 @@ class EmbeddingFunctions:
         return normalized_descriptors
 
     # Slower embedding methods ---------------------------------------------------------------------------------------
-    # (These methods weren't used in the project (explained in the report))
-    @staticmethod
-    def cnn_embedding(img, model_name='vgg16'):
+    def cnn_embedding(self, img, model_name='vgg16'):
         """
         Classic CNN embedding using vgg16.
         Generate CNN features using a pre-trained model.
@@ -281,28 +305,18 @@ class EmbeddingFunctions:
         """
         # Load pre-trained model
         if model_name == 'resnet50':
-            model = models.resnet50(pretrained=True)
+            model = self.resnet50
         elif model_name == 'vgg16':
-            model = PTmodels.vgg16(weights=PTmodels.VGG16_Weights.IMAGENET1K_V1)
+            model = self.vgg16
         else:
             raise ValueError("Unsupported model name")
-
-        model = torch.nn.Sequential(*list(model.children())[:-1])
-        model.eval()
-
-        # Prepare image
-        transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
 
         # img = Image.open(image_path).convert('RGB')
         # Ensure input is PIL Image
         if not isinstance(img, Image.Image):
             img = transforms.ToPILImage()(img)
-        img_t = transform(img)
+
+        img_t = self.transform(img)
         batch_t = torch.unsqueeze(img_t, 0)
 
         # Generate embedding
@@ -311,8 +325,7 @@ class EmbeddingFunctions:
 
         return embedding.numpy().flatten()
 
-    @staticmethod
-    def resnet18_embedding(img, layer='avgpool'):
+    def resnet18_embedding(self, img, layer='avgpool'):
         """
         Faster CNN embedding using resnet18.
         Compute ResNet18 embedding for an image.
@@ -325,16 +338,7 @@ class EmbeddingFunctions:
         np.ndarray: Flattened embedding vector
         """
         # Load pretrained ResNet18
-        model = PTmodels.resnet18(weights=PTmodels.ResNet18_Weights.IMAGENET1K_V1)
-        model.eval()
-
-        # Preprocessing
-        preprocess = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        model = self.resnet18
 
         # if not isinstance(img, np.ndarray):
         # Ensure input is PIL Image
@@ -342,7 +346,7 @@ class EmbeddingFunctions:
             img = transforms.ToPILImage()(img)
 
             # Preprocess image
-        input_tensor = preprocess(img).unsqueeze(0)
+        input_tensor = self.transform(img).unsqueeze(0)
 
         # Extract features
         with torch.no_grad():
@@ -357,8 +361,7 @@ class EmbeddingFunctions:
 
         return features.squeeze().numpy().flatten()
 
-    @staticmethod
-    def object_composition_embedding(img, boost_wieght=10):
+    def object_composition_embedding(self, img, boost_weight=10):
         """
         Generate object composition embedding using a pre-trained Faster R-CNN model.
 
@@ -370,32 +373,25 @@ class EmbeddingFunctions:
         dict: Object composition (class labels and their counts)
         """
         const_number_of_class_in_fasterrcnn_resnet50_fpn = 91
-        # Load pre-trained model
-        # model = fasterrcnn_resnet50_fpn(pretrained=True)
-        model = PTmodels.detection.fasterrcnn_resnet50_fpn(
-            weights=PTmodels.detection.FasterRCNN_ResNet50_FPN_Weights.DEFAULT)
-        model.eval()
 
         # Prepare image
-        # img = Image.open(image_path).convert('RGB')
         img_tensor = to_tensor(img).unsqueeze(0)
 
         # Perform object detection
         with torch.no_grad():
-            prediction = model(img_tensor)
+            prediction = self.faster_resnet50(img_tensor)
 
         # Process predictions
         labels = prediction[0]['labels'].numpy()
         scores = prediction[0]['scores'].numpy()
 
-        composition = [0 for _ in range(const_number_of_class_in_fasterrcnn_resnet50_fpn)]
+        composition = [0] * const_number_of_class_in_fasterrcnn_resnet50_fpn
         for u, c in zip(labels, scores):
-            composition[u] = c * boost_wieght
+            composition[u] = c * boost_weight
 
         return np.array(composition)
 
-    @staticmethod
-    def semantic_concept_embedding(image):  # image_path):
+    def semantic_concept_embedding(self, image):
         """
         Generate embedding based on high-level semantic concepts using CLIP.
 
@@ -405,17 +401,13 @@ class EmbeddingFunctions:
         Returns:
         np.array: Semantic concept features
         """
-        # Load CLIP model and processor
-        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
         # Prepare image
-        # image = Image.open(image_path)
-        inputs = processor(images=image, return_tensors="pt", padding=True)
+        inputs = self.clip_processor(images=image, return_tensors="pt", padding=True)
 
         # Generate embedding
         with torch.no_grad():
-            image_features = model.get_image_features(**inputs)
+            image_features = self.clip_model.get_image_features(**inputs)
 
         return image_features.numpy()[0]
 
@@ -452,21 +444,35 @@ class EmbeddingFunctions:
     def measure_embedding_times(image_list: Image.Image, embedding_functions: dict, num_examples):
         results = {}
         for name, func in embedding_functions.items():
-            # print("for function :", name)
             start_time = time.time()
             for image in image_list[:num_examples]:
                 func(np.array(image))
                 if time.time() - start_time > num_examples:
                     break
             end_time = time.time()
-            # print("the time is:", end_time - start_time)
+            print(f"Time: {round(end_time - start_time, 4)}s\tFunction: {name}")
             results[name] = end_time - start_time
         return results
 
     @staticmethod
-    def compute_embedding_scores(embeddings):
+    def compute_embedding_scores(embeddings, start=0.0):
         """
-        Compute scores for transformed images based on their embedding distances
+        Compute scores for transformed images based on their embedding distances.
+        We have a 4n-sized set of n transformed images - each image has 4 representations in the set.
+        Each representation is one of the 4 levels of transformation:
+            1. Not transformed (original)
+            2. Slightly transformed
+            3. Moderately transformed
+            4. Heavily transformed
+        The goal is to examine how significantly the transformation affects the rank of the transformed image.
+        The rank here is the place in the set sorted by cosine similarity with the original image embedding.
+        For each image, we compute the final score using the ranks of the 4 transformation levels of the image.
+        (See the implementation of the scoring at the end of the function).
+        The idea is as follows:
+            1. Take the original image embedding.
+            2. Sort the set according to the cosine similarity to the original image embedding.
+            3. Compute the rank for each of the 4 transformations of the image.
+            4. Use the scoring formula to compute the final score.
 
         Args:
         embeddings (torch.Tensor or np.ndarray): 100 image embeddings
@@ -481,13 +487,14 @@ class EmbeddingFunctions:
         # Number of sets (25 original images * 4 transformation groups)
         num_sets = len(embeddings) // 4  # 25
         scores = []
-
+        mean_ranks = {}
         for set_idx in range(num_sets):
             # Select the base (original) image embedding
             base_index = set_idx * 4
 
             # Select the current set of 4 embeddings
             current_set_embeddings = embeddings[base_index:base_index + 4]
+            # base_embedding is the embedding of the original, non-transformed image
             base_embedding = current_set_embeddings[0]
 
             # Compute distances between base embedding and all 100 embeddings
@@ -499,19 +506,22 @@ class EmbeddingFunctions:
             # Find the rank of the original images in this set
             for i in range(base_index, base_index + 4):
                 ranks.append(np.where(sorted_indices == i)[0][0])
+                print(f"\rRun time: {round(time.time() - start, 2)}", end="")
 
             # Advanced scoring method
             # Exponential penalty for higher ranks with non-linear decay
             score = (
                     4 * np.exp(-ranks[0] / 10) +  # Original image
-                    3 * np.exp(-ranks[1] / 20) +  # Lightly transformed
+                    3 * np.exp(-ranks[1] / 20) +  # Slightly transformed
                     2 * np.exp(-ranks[2] / 30) +  # Moderately transformed
-                    1 * np.exp(-ranks[3] / 50)  # Heavily transformed
+                    1 * np.exp(-ranks[3] / 40)  # Heavily transformed
             )
 
             scores.append(score)
+            # mean_ranks.append(round(np.mean(ranks), 4))
+            mean_ranks[set_idx] = ranks
 
-        return scores
+        return scores, mean_ranks
 
     def comprehensive_embedding_analysis(self, image_transformations, embedding_functions, verbose=True):
         """
@@ -527,9 +537,11 @@ class EmbeddingFunctions:
         """
         # Final results storage
         analysis_results = {}
-
+        print(f"Comparing embedding performance and score across different transformation types and embedding methods, on the sample set of {len(image_transformations)} images")
         # Iterate through each embedding method
         for embed_name, embed_func in embedding_functions.items():
+            start = time.time()
+            print(f"\nMethod: {embed_name}")
             # Store results for this embedding method
             embed_results = {}
 
@@ -537,16 +549,14 @@ class EmbeddingFunctions:
             for transform_name, images in image_transformations.items():
                 # Convert images to numpy array of embeddings
                 try:
-                    embeddings = np.array([
-                        embed_func(np.array(img)) for img in images
-                    ])
+                    embeddings = np.array([embed_func(np.array(img)) for img in images])
                 except Exception as e:
                     print(f"Error embedding {transform_name} with {embed_name}: {e}")
                     continue
 
                 # Compute embedding scores
                 try:
-                    scores = self.compute_embedding_scores(embeddings)
+                    scores, _ = self.compute_embedding_scores(embeddings, start=start)
 
                     # Compute statistics
                     mean_score = np.mean(scores)
@@ -556,7 +566,7 @@ class EmbeddingFunctions:
                     embed_results[transform_name] = {
                         # 'scores': scores,
                         'mean_score': round(mean_score, 5),
-                        'std_score': round(std_score, 5)
+                        'std_score': round(std_score, 5),
                     }
                 except Exception as e:
                     print(f"Error computing scores for {transform_name} with {embed_name}: {e}")
@@ -566,7 +576,7 @@ class EmbeddingFunctions:
 
         # Verbose printing
         if verbose:
-            print("\n===== Embedding Analysis Results =====")
+            print("\n\n===== Embedding Analysis Results =====")
             for embed_name, embed_results in analysis_results.items():
                 print(f"\n{embed_name} Embedding Analysis:")
                 for transform_name, result in embed_results.items():

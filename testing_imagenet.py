@@ -85,7 +85,7 @@ def get_similar_image_pairs_tiny(num_pairs, pair_size=2, base_dir="./dataset", s
     for class_dir in tqdm(class_dirs):
         class_path = os.path.join(train_dir, class_dir)
         image_files = [f for f in os.listdir(os.path.join(class_path, "images"))
-                       if f.endswith('.JPEG')][:min(500, 10 + pair_size)]  # Take up to 10 images per class
+                       if f.endswith('.JPEG')][:min(500, 10 + pair_size)]
 
         if len(image_files) >= pair_size:  # Only include classes with at least 2 images
             class_images[class_dir] = []
@@ -100,19 +100,18 @@ def get_similar_image_pairs_tiny(num_pairs, pair_size=2, base_dir="./dataset", s
                 class_features[class_dir].append(features.flatten())
 
     print("Finding similar pairs...")
-    """
-    for _ in tqdm(range(num_pairs)):
-        # Find an unused class
-        available_classes = [c for c in class_images.keys()
-                             if c not in used_classes and len(class_images[c]) >= pair_size]
+    # for _ in tqdm(range(num_pairs)):
+    #     # Find an unused class
+    #     available_classes = [c for c in class_images.keys()
+    #                          if c not in used_classes and len(class_images[c]) >= pair_size]
+    #
+    #     if not available_classes:
+    #         raise ValueError(f"Not enough unique classes with sufficient images. "
+    #                          f"Only found {len(selected_images) // pair_size} pairs.")
+    #
+    #     # Pick a random unused class
+    #     chosen_class = np.random.choice(available_classes)
 
-        if not available_classes:
-            raise ValueError(f"Not enough unique classes with sufficient images. "
-                             f"Only found {len(selected_images) // pair_size} pairs.")
-
-        # Pick a random unused class
-        chosen_class = np.random.choice(available_classes)
-        """
     for chosen_class in class_images.keys():
         if len(class_images[chosen_class]) <= pair_size:
             raise ValueError(f"Not enough unique classes with sufficient images. "
@@ -123,7 +122,7 @@ def get_similar_image_pairs_tiny(num_pairs, pair_size=2, base_dir="./dataset", s
         class_feat = class_features[chosen_class]
         class_imgs = class_images[chosen_class]
 
-        # Pick first image randomly
+        # Pick the first image randomly
         first_idx = np.random.randint(len(class_imgs))
         first_features = class_feat[first_idx]
 
@@ -139,6 +138,7 @@ def get_similar_image_pairs_tiny(num_pairs, pair_size=2, base_dir="./dataset", s
 
         for second_idx in pair_inxs:
             selected_images.extend([class_imgs[second_idx].numpy()])
+    print("Done")
 
     return np.array(selected_images), selected_class_names
 
@@ -153,7 +153,7 @@ def visualize_tiny_imagenet_pairs(images, class_names, pair_size=2):
     """
 
     num_pairs = len(images) // pair_size
-    fig, axes = plt.subplots(num_pairs, pair_size, figsize=(10, 5 * num_pairs))
+    fig, axes = plt.subplots(num_pairs, pair_size, figsize=(20, 2 * num_pairs))
 
     if num_pairs == 1:
         axes = axes.reshape(1, -1)

@@ -20,14 +20,25 @@ class MultimodalANN:
     def __init__(self, init=True):
         self.methods_list = {}
 
+        # indexes
+        self.hnsw = faiss.IndexHNSWFlat
+        self.args = [0, 16]
+        self.faiss_params = True
+
+        # self.hnsw = faiss.IndexFlatIP # Exact search, for comparing
+        # self.args = [0]
+        # self.faiss_params = False
+
+        self.lsh = faiss.IndexLSH
+
         if init:
+            # self.methods_list["Split LSH"] = self.split_lsh_ann
             self.methods_list["hnsw_simple_concatenation"] = self.hnsw_simple_concatenation_ann
             self.methods_list["LSH_simple_concatenation"] = self.lsh_simple_concatenation_ann
             self.methods_list["separate indexing"] = self.multi_index_ann
-            self.methods_list["Split LSH"] = self.split_lsh_ann
             self.methods_list["just norm"] = self.just_norm_ann
             self.methods_list["Normalized and Scaled"] = self.normalized_scaled_ann
-            # self.methods_list["learn_class_weights"] = self.wrapper_learn_class_weights  # TODO: check this func
+            self.methods_list["learn_class_weights"] = self.raise_error
             self.methods_list["Dimension Reduction"] = self.dimension_reduction_ann
             self.methods_list["robust multi index"] = self.robust_multi_index_ann
             self.methods_list["Capped Distance"] = self.capped_distance_ann
@@ -41,8 +52,7 @@ class MultimodalANN:
     # The simplest fusion strategy involves concatenating all embedding vectors from the different modalities.
     # This approach treats each embedding as a separate dimension in a single, unified vector space without any further
     # processing or weighting. This strategy was tested on HNSW and LSH.
-    @staticmethod
-    def hnsw_simple_concatenation_ann(data: EmbeddingsList) -> SearchFunction:
+    def hnsw_simple_concatenation_ann(self, data: EmbeddingsList) -> SearchFunction:
         """
         Simple concatenation method. Concatenates embeddings as-is.
 
@@ -68,9 +78,11 @@ class MultimodalANN:
         ]).astype('float32')
 
         # Create and train index
-        index = faiss.IndexHNSWFlat(total_dim, 16)
-        index.hnsw.efConstruction = 100
-        index.hnsw.efSearch = 64
+        self.args[0] = total_dim
+        index = self.hnsw(*self.args)
+        if self.faiss_params:
+            index.hnsw.efConstruction = 100
+            index.hnsw.efSearch = 64
         index.add(concatenated_data)
 
         def search(query_embeddings: List[np.ndarray], k: int = 5) -> Tuple[np.ndarray, np.ndarray]:
@@ -83,8 +95,7 @@ class MultimodalANN:
 
         return search
 
-    @staticmethod
-    def lsh_simple_concatenation_ann(data: EmbeddingsList, num_planes: int = 256) -> SearchFunction:
+    def lsh_simple_concatenation_ann(self, data: EmbeddingsList, num_planes: int = 256) -> SearchFunction:
         """
         Normal LSH method. Applies LSH to concatenated embeddings.
 
@@ -109,7 +120,7 @@ class MultimodalANN:
         ]).astype('float32')
 
         # Create and train LSH index
-        index = faiss.IndexLSH(total_dim, num_planes)
+        index = self.lsh(total_dim, num_planes)
         index.train(concatenated_data)
         index.add(concatenated_data)
 
@@ -128,8 +139,7 @@ class MultimodalANN:
     # During the search phase, each embedding is queried independently, and the results are combined based on the
     # respective similarity scores. This approach allows each embedding type to maintain its own search space but
     # does not account for the interactions between the different types.
-    @staticmethod
-    def multi_index_ann(data: EmbeddingsList) -> SearchFunction:
+    def multi_index_ann(self, data: EmbeddingsList) -> SearchFunction:
         """
         Creates separate indices for each embedding type and combines their results,
         calculating distances to all embeddings for each candidate.
@@ -155,9 +165,11 @@ class MultimodalANN:
             embeddings = np.vstack([entry[i] for entry in data]).astype('float32')
             embeddings_by_type.append(embeddings)
 
-            index = faiss.IndexHNSWFlat(dims[i], 16)
-            index.hnsw.efConstruction = 100
-            index.hnsw.efSearch = 64
+            self.args[0] = dims[i]
+            index = self.hnsw(*self.args)
+            if self.faiss_params:
+                index.hnsw.efConstruction = 100
+                index.hnsw.efSearch = 64
             index.add(embeddings)
             indices.append(index)
 
@@ -199,8 +211,7 @@ class MultimodalANN:
 
         return search
 
-    @staticmethod
-    def split_lsh_ann(data: EmbeddingsList, num_planes: int = 256) -> SearchFunction:
+    def split_lsh_ann(self, data: EmbeddingsList, num_planes: int = 256) -> SearchFunction:
         """
         Split LSH method. Applies LSH separately to each embedding type.
 
@@ -234,7 +245,7 @@ class MultimodalANN:
         # Create separate LSH indexes for each embedding type
         indexes = []
         for i, dim in enumerate(dims):
-            index = faiss.IndexLSH(total_dim, planes_per_type[i])
+            index = self.lsh(total_dim, planes_per_type[i])
 
             # Create masked training data
             masked_data = np.zeros((len(data), total_dim), dtype='float32')
@@ -277,8 +288,7 @@ class MultimodalANN:
     # To improve the performance of the concatenation method, embeddings are first normalized (to unit length)
     # and scaled. This ensures that embeddings with different ranges and magnitudes are brought to a common scale,
     # making them more comparable in terms of distance calculations during the search phase.
-    @staticmethod
-    def just_norm_ann(data: EmbeddingsList) -> SearchFunction:
+    def just_norm_ann(self, data: EmbeddingsList) -> SearchFunction:
         """
         Standard ANN: normalize each embedding to have a cosine-similarity-like search score.
         """
@@ -295,9 +305,11 @@ class MultimodalANN:
         # Create separate indexes for each embedding type for efficient search
         indexes = []
         for i, emb in enumerate(normalized_data):
-            index = faiss.IndexHNSWFlat(dims[i], 16)
-            index.hnsw.efConstruction = 100
-            index.hnsw.efSearch = 64
+            self.args[0] = dims[i]
+            index = self.hnsw(*self.args)
+            if self.faiss_params:
+                index.hnsw.efConstruction = 100
+                index.hnsw.efSearch = 64
             index.add(emb.astype('float32'))
             indexes.append(index)
 
@@ -351,8 +363,7 @@ class MultimodalANN:
 
         return search
 
-    @staticmethod
-    def normalized_scaled_ann(data: EmbeddingsList) -> SearchFunction:
+    def normalized_scaled_ann(self, data: EmbeddingsList) -> SearchFunction:
         """
         Normalized and scaled concatenation method. Normalizes each embedding type
         and scales based on dimension size.
@@ -420,9 +431,11 @@ class MultimodalANN:
         ]).astype('float32')
 
         # Create and train index
-        index = faiss.IndexHNSWFlat(total_dim, 16)
-        index.hnsw.efConstruction = 100
-        index.hnsw.efSearch = 64
+        self.args[0] = total_dim
+        index = self.hnsw(*self.args)
+        if self.faiss_params:
+            index.hnsw.efConstruction = 100
+            index.hnsw.efSearch = 64
         index.add(concatenated_data)
 
         def search(query_embeddings: List[np.ndarray], k: int = 5) -> Tuple[np.ndarray, np.ndarray]:
@@ -451,8 +464,7 @@ class MultimodalANN:
     # Weighted fusion is a common baseline fusion strategy when the weights are known beforehand.
     # In this approach, we use the indexing data and their class index to very quickly learn helpful weights by
     # comparing cluster class size under each embedding type and other quick indicators to identify stronger embeddings.
-    @staticmethod
-    def wrapper_learn_class_weights(class_ids: List[int], stop_in=20) -> List[float]:
+    def wrapper_learn_class_weights(self, class_ids: List[int], stop_in=20) -> List[float]:
         def indexing_stage(data: EmbeddingsList) -> SearchFunction:
             """
             Learn the weights for each embedding type based on distances to the class center.
@@ -542,7 +554,7 @@ class MultimodalANN:
             weights /= np.mean(weights)
             weights = weights.tolist()
 
-            print("during the training process of learn_class , found the weights for each embedding are", weights)
+            # print("during the training process of learn_class , found the weights for each embedding are", weights)
 
             dims = [data[0][i].shape[-1] for i in range(num_embedding_types)]
 
@@ -551,9 +563,11 @@ class MultimodalANN:
             embeddings_by_type = []
             embeddings = np.hstack([np.vstack([entry[i] * w for entry in data]) for i, w in enumerate(weights)])
 
-            index = faiss.IndexHNSWFlat(sum(dims), 16)
-            index.hnsw.efConstruction = 100
-            index.hnsw.efSearch = 64
+            self.args[0] = sum(dims)
+            index = self.hnsw(*self.args)
+            if self.faiss_params:
+                index.hnsw.efConstruction = 100
+                index.hnsw.efSearch = 64
             index.add(embeddings)
 
             def search(query_embeddings: List[np.ndarray], k: int = 5) -> Tuple[np.ndarray, np.ndarray]:
@@ -568,19 +582,17 @@ class MultimodalANN:
 
             return search
 
-        return indexing_stage  # TODO: why the wrapper?
+        return indexing_stage
 
-    # def raise_error(x):
-    #     raise "wrapper not started with class_ids"
-    #
-    # methods_list["learn_class_weights"] = raise_error TODO: what is that?
+    @staticmethod
+    def raise_error(x):
+        raise "wrapper not started with class_ids"
 
     # Dimension Reduction (PCA) --------------------------------------------------------------------------------------
     # Principal Component Analysis (PCA) is applied to reduce the dimensionality of the combined embeddings.
     # The goal is to extract the most important features while discarding noise and redundant information.
     # This reduces the computational cost of the search while maintaining as much discriminative power as possible.
-    @staticmethod
-    def dimension_reduction_ann(data: EmbeddingsList, target_dim: int = 128) -> SearchFunction:
+    def dimension_reduction_ann(self, data: EmbeddingsList, target_dim: int = 128) -> SearchFunction:
         """
         Dimension reduction method. Reduces total dimensions to a target size.
 
@@ -618,9 +630,11 @@ class MultimodalANN:
         reduced_data = reducer.apply_py(concatenated_data)
 
         # Create and train index on reduced data
-        index = faiss.IndexHNSWFlat(target_dim, 16)
-        index.hnsw.efConstruction = 100
-        index.hnsw.efSearch = 64
+        self.args[0] = target_dim
+        index = self.hnsw(*self.args)
+        if self.faiss_params:
+            index.hnsw.efConstruction = 100
+            index.hnsw.efSearch = 64
         index.add(reduced_data)
 
         def search(query_embeddings: List[np.ndarray], k: int = 5) -> Tuple[np.ndarray, np.ndarray]:
@@ -644,8 +658,7 @@ class MultimodalANN:
     # modality's respective index. The results from each search are then merged using reciprocal rank, which adjusts
     # the final ranking based on the relative importance of each embedding type. This approach accounts for the
     # varying relevance of each modality in the final result.
-    @staticmethod
-    def robust_multi_index_ann(data: EmbeddingsList) -> SearchFunction:
+    def robust_multi_index_ann(self, data: EmbeddingsList) -> SearchFunction:
         """
         Creates a robust ANN search that can handle unreliable embeddings.
 
@@ -678,9 +691,11 @@ class MultimodalANN:
             means.append(np.mean(embeddings, axis=0))
             stds.append(np.std(embeddings, axis=0))
 
-            index = faiss.IndexHNSWFlat(dims[i], 16)
-            index.hnsw.efConstruction = 100
-            index.hnsw.efSearch = 64
+            self.args[0] = dims[i]
+            index = self.hnsw(*self.args)
+            if self.faiss_params:
+                index.hnsw.efConstruction = 100
+                index.hnsw.efSearch = 64
             index.add(embeddings)
             indices.append(index)
 
@@ -845,8 +860,7 @@ class MultimodalANN:
     # This method ranks the results for each embedding type separately and then smooths the distances between embeddings
     # by adjusting the proximity based on the number of close matches from each embedding.
     # This helps to mitigate the impact of noisy or mismatched embeddings by promoting a more stable and consistent ranking.
-    @staticmethod
-    def tolerant_ann(data: EmbeddingsList, subset_size: int = None) -> SearchFunction:
+    def tolerant_ann(self, data: EmbeddingsList, subset_size: int = None) -> SearchFunction:
         """
         Outlier-tolerant ANN method. Creates multiple indexes using different subsets of embeddings.
         Finds matches that are close in most, but not necessarily all, embedding spaces.
@@ -888,9 +902,11 @@ class MultimodalANN:
             ]).astype('float32')
 
             # Create and train index
-            index = faiss.IndexHNSWFlat(combo_dim, 16)
-            index.hnsw.efConstruction = 100
-            index.hnsw.efSearch = 64
+            self.args[0] = combo_dim
+            index = self.hnsw(*self.args)
+            if self.faiss_params:
+                index.hnsw.efConstruction = 100
+                index.hnsw.efSearch = 64
             index.add(combo_data)
 
             indexes.append((combo, index))
@@ -940,8 +956,7 @@ class MultimodalANN:
     # types if some embeddings are very close to each other. This approach emphasizes the strength of close matches
     # in one modality and allows the other modalities to contribute more strongly if they align closely,
     # improving overall search accuracy.
-    @staticmethod
-    def emphasis_close_ann(data: EmbeddingsList, boost_threshold: float = 0.3,
+    def emphasis_close_ann(self, data: EmbeddingsList, boost_threshold: float = 0.3,
                            default_high_distance=0.4) -> SearchFunction:
         """
         ANN method that emphasizes close matches in any embedding type.
@@ -971,9 +986,11 @@ class MultimodalANN:
         # Create separate indexes for each embedding type for efficient search
         indexes = []
         for i, emb in enumerate(normalized_data):
-            index = faiss.IndexHNSWFlat(dims[i], 16)
-            index.hnsw.efConstruction = 100
-            index.hnsw.efSearch = 64
+            self.args[0] = dims[i]
+            index = self.hnsw(*self.args)
+            if self.faiss_params:
+                index.hnsw.efConstruction = 100
+                index.hnsw.efSearch = 64
             index.add(emb.astype('float32'))
             indexes.append(index)
 

@@ -2,6 +2,7 @@ import time
 import numpy as np
 from typing import Dict, Callable, Tuple, List
 import pandas as pd
+from tqdm import tqdm
 from IPython.display import clear_output
 
 
@@ -55,7 +56,7 @@ def evaluate_ann_search(
     ) * pair_size
 
     # Iterate through each ANN method
-    for method_name, ANN_func in ann_methods.items():
+    for method_name, ANN_func in tqdm(ann_methods.items()):
         # print(f"Evaluating method: {method_name}")
 
         # Performance tracking variables
@@ -71,16 +72,16 @@ def evaluate_ann_search(
         index_build_time = time.time() - start_time
 
         # Perform searches
-        for indices in pair_indices:
+        for index in pair_indices:
             # Run the search
             start_time = time.time()
-            distances, indices = search_func(embedded_images[indices], K)
+            distances, indices = search_func(embedded_images[index], K)
             search_time = time.time() - start_time
 
             search_times.append(search_time)
 
-            query_pairs = set([int(indices) + i for i in range(1, pair_size)])
-            set_indices = set(indices[:K].tolist()[0])
+            query_pairs = set([int(index) + i for i in range(1, pair_size)])
+            set_indices = set(indices.tolist()[0][:K])
             matches = len(set_indices & query_pairs)
 
             # Calculate various metrics
@@ -93,7 +94,7 @@ def evaluate_ann_search(
             # Mean Average Precision
             precisions = []
             for i in range(1, K + 1):
-                precision_at_k = len(set(indices[:i].tolist()[0]) & query_pairs) / i
+                precision_at_k = len(set(indices.tolist()[0][:i]) & query_pairs) / i
                 precisions.append(precision_at_k)
             map_scores.append(np.mean(precisions))
 

@@ -5,6 +5,7 @@ import random
 import torchvision.transforms as transforms
 from torchvision.transforms.functional import to_tensor
 from torchvision.datasets import CIFAR100
+from time import time
 
 
 # Image transformation functions ------------------------------------------------------------------------------------
@@ -79,17 +80,22 @@ def apply_crop_changes(image):
 
 
 # Visualization functions for transformations and the dataset --------------------------------------------------------
-def display_image_grid(images, n_rows=5, n_cols=5):
-    """Display images in a grid"""
-    plt.figure(figsize=(15, 15))
-    for idx, image in enumerate(images):
-        if idx >= n_rows * n_cols:
-            break
-        plt.subplot(n_rows, n_cols, idx + 1)
-        plt.imshow(image)
-        plt.axis('off')
-    plt.tight_layout()
-    plt.show()
+def get_sample_images_from_cifar100(n_images=25, seed=None):
+    """Get n_images unique images from CIFAR100 dataset"""
+    # Load CIFAR100 dataset
+    dataset = CIFAR100(root='./data', train=True, download=True)
+
+    # Randomly select n_images unique indices
+    random.seed(seed if seed else time())
+    selected_indices = random.sample(range(len(dataset)), n_images)
+
+    # Get the images
+    images = []
+    for idx in selected_indices:
+        img, _ = dataset[idx]
+        images.append(img)
+
+    return images
 
 
 def create_transformation_dataset(images):
@@ -100,7 +106,7 @@ def create_transformation_dataset(images):
                                 "brightness": apply_brightness_changes,
                                 "noise": apply_noise_changes,
                                 "blur": apply_blur_changes,
-                                #"crop":apply_crop_changes # changes size
+                                "crop": apply_crop_changes  # changes size
                                 }
     for transformation_name, transform_func in transformation_functions.items():
         result = []
@@ -113,19 +119,16 @@ def create_transformation_dataset(images):
     return all_transformed_images
 
 
-# Auxiliary methods for testing -------------------------------------------------------------------------------------
-def get_sample_images_from_cifar100(n_images=25):
-    """Get n_images unique images from CIFAR100 dataset"""
-    # Load CIFAR100 dataset
-    dataset = CIFAR100(root='./data', train=True, download=True)
+def display_image_grid(images, n_rows=5, n_cols=5, figsize=(10, 10)):
+    """Display images in a grid"""
+    plt.figure(figsize=figsize)
+    for idx, image in enumerate(images):
+        if idx >= n_rows * n_cols:
+            break
+        plt.subplot(n_rows, n_cols, idx + 1)
+        plt.imshow(image)
+        plt.axis('off')
+    plt.tight_layout()
+    plt.show()
 
-    # Randomly select n_images unique indices
-    selected_indices = random.sample(range(len(dataset)), n_images)
 
-    # Get the images
-    images = []
-    for idx in selected_indices:
-        img, _ = dataset[idx]
-        images.append(img)
-
-    return images
